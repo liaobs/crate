@@ -66,10 +66,7 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.io.IOException;
-import java.util.Arrays;
-import java.util.List;
-import java.util.UUID;
-import java.util.Vector;
+import java.util.*;
 import java.util.concurrent.CancellationException;
 
 import static io.crate.testing.TestingHelpers.createReference;
@@ -274,6 +271,24 @@ public class LuceneDocCollectorTest extends SQLTransportIntegrationTest {
             assertThat((Integer)projection.rows.get(i)[0], is(i));
         }
         assertThat(projection.finished, is(true));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void testUnorderedPauseResume() throws Exception {
+        PausingCollectingProjector projector = new PausingCollectingProjector();
+        ReferenceIdent populationIdent = new ReferenceIdent(new TableIdent("doc", "countries"), "population");
+        Reference population = new Reference(new ReferenceInfo(populationIdent, RowGranularity.DOC, DataTypes.INTEGER));
+        LuceneDocCollector docCollector = createDocCollector(null, null, ImmutableList.<Symbol>of(population), WhereClause.MATCH_ALL, PAGE_SIZE, projector);
+        docCollector.doCollect();
+        assertThat(projector.rows.size(), is(5));
+        docCollector.resume();
+        assertThat(projector.rows.size(), is(NUMBER_OF_DOCS));
+        assertThat(new ArrayList<>(projector.rows), containsInAnyOrder(new ArrayList(){{
+            for (int i = 0; i < NUMBER_OF_DOCS; i++) {
+                add(equalTo(new Object[]{i}));
+            }
+        }}));
     }
 
     @Test

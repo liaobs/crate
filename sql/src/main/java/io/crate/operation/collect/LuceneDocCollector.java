@@ -143,6 +143,13 @@ public class LuceneDocCollector extends Collector implements CrateCollector, Row
 
     @Override
     public void collect(int doc) throws IOException {
+        if (pendingPause && orderBy == null) {
+            if (paused.compareAndSet(false, true)) {
+                pendingPause = false;
+                throw new CollectionTerminatedException();  // TODO: maybe create a CollectionPausedException
+            }
+        }
+
         if (killed) {
             throw new CancellationException();
         }
@@ -224,6 +231,8 @@ public class LuceneDocCollector extends Collector implements CrateCollector, Row
         } catch (CollectionFinishedEarlyException e) {
             paused.set(false);
             downstream.finish();
+        } catch (CollectionTerminatedException e) {
+            // paused - do nothing
         } catch (Throwable e) {
             paused.set(false);
             searchContext.close();
@@ -252,17 +261,11 @@ public class LuceneDocCollector extends Collector implements CrateCollector, Row
 
     @Override
     public void pause() {
-        if (orderBy == null) {
-            throw new UnsupportedOperationException();
-        }
         pendingPause = true;
     }
 
     @Override
     public void resume() {
-        if (orderBy == null) {
-            throw new UnsupportedOperationException();
-        }
         if (paused.compareAndSet(true, false)) {
             doCollect(collectContext);
         }
