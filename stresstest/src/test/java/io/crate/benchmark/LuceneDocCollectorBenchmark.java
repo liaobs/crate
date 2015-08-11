@@ -27,6 +27,7 @@ import com.carrotsearch.junitbenchmarks.annotation.BenchmarkHistoryChart;
 import com.carrotsearch.junitbenchmarks.annotation.BenchmarkMethodChart;
 import com.carrotsearch.junitbenchmarks.annotation.LabelType;
 import com.google.common.collect.ImmutableList;
+import io.crate.action.job.SharedShardContexts;
 import io.crate.analyze.OrderBy;
 import io.crate.analyze.WhereClause;
 import io.crate.breaker.RamAccountingContext;
@@ -54,6 +55,7 @@ import org.elasticsearch.action.bulk.BulkResponse;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.client.Client;
+import org.elasticsearch.cluster.ClusterService;
 import org.elasticsearch.common.breaker.CircuitBreaker;
 import org.elasticsearch.common.breaker.NoopCircuitBreaker;
 import org.elasticsearch.common.bytes.BytesArray;
@@ -198,10 +200,12 @@ public class LuceneDocCollectorBenchmark extends BenchmarkBase {
         ShardProjectorChain projectorChain = Mockito.mock(ShardProjectorChain.class);
         Mockito.when(projectorChain.newShardDownstreamProjector(Matchers.any(ProjectionToProjectorVisitor.class))).thenReturn(projector);
 
+        SharedShardContexts sharedShardContexts = new SharedShardContexts(
+                CLUSTER.getDataNodeInstance(IndicesService.class));
         JobExecutionContext.Builder builder = jobContextService.newBuilder(jobId);
         jobCollectContext = new JobCollectContext(jobId, node,
                 CLUSTER.getInstance(MapSideDataCollectOperation.class),
-                RAM_ACCOUNTING_CONTEXT, collectingProjector);
+                RAM_ACCOUNTING_CONTEXT, collectingProjector, sharedShardContexts);
         builder.addSubContext(node.executionPhaseId(), jobCollectContext);
         return (LuceneDocCollector)shardCollectService.getCollector(node, projectorChain, jobCollectContext, 0, PAGE_SIZE);
     }

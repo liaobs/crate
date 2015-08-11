@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public abstract class RowDownstreamAndHandle implements RowDownstream, RowUpstream, RowDownstreamHandle {
 
-    private final List<RowUpstream> upstreams = new ArrayList<>(1);
+    protected final List<RowUpstream> upstreams = new ArrayList<>(1);
     protected final AtomicInteger remainingUpstreams = new AtomicInteger(0);
     private final AtomicBoolean failed = new AtomicBoolean(false);
 

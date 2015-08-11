@@ -25,10 +25,7 @@ import com.google.common.base.Function;
 import com.google.common.collect.FluentIterable;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
-import io.crate.action.job.ContextPreparer;
-import io.crate.action.job.JobRequest;
-import io.crate.action.job.JobResponse;
-import io.crate.action.job.TransportJobAction;
+import io.crate.action.job.*;
 import io.crate.core.collections.Bucket;
 import io.crate.executor.JobTask;
 import io.crate.executor.TaskResult;
@@ -41,6 +38,7 @@ import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.cluster.ClusterService;
 import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.Loggers;
+import org.elasticsearch.indices.IndicesService;
 
 import javax.annotation.Nullable;
 import java.util.*;
@@ -55,6 +53,8 @@ public class ExecutionPhasesTask extends JobTask {
     private final ClusterService clusterService;
     private ContextPreparer contextPreparer;
     private final JobContextService jobContextService;
+    private final IndicesService indicesService;
+
 
     private final List<SettableFuture<TaskResult>> results = new ArrayList<>();
     private boolean hasDirectResponse;
@@ -63,12 +63,14 @@ public class ExecutionPhasesTask extends JobTask {
                                   ClusterService clusterService,
                                   ContextPreparer contextPreparer,
                                   JobContextService jobContextService,
+                                  IndicesService indicesService,
                                   TransportJobAction transportJobAction,
                                   List<NodeOperationTree> nodeOperationTrees) {
         super(jobId);
         this.clusterService = clusterService;
         this.contextPreparer = contextPreparer;
         this.jobContextService = jobContextService;
+        this.indicesService = indicesService;
         this.transportJobAction = transportJobAction;
         this.nodeOperationTrees = nodeOperationTrees;
 
@@ -162,8 +164,9 @@ public class ExecutionPhasesTask extends JobTask {
         Collection<NodeOperation> localNodeOperations = operationsByServer.remove(localNodeId);
         JobExecutionContext.Builder builder = jobContextService.newBuilder(jobId());
         if (localNodeOperations != null) {
+            SharedShardContexts sharedShardContexts = new SharedShardContexts(indicesService);
             for (NodeOperation nodeOperation : localNodeOperations) {
-                contextPreparer.prepare(jobId(), nodeOperation, builder, null);
+                contextPreparer.prepare(jobId(), nodeOperation, sharedShardContexts, builder, null);
             }
         }
         builder.addSubContext(localMergeExecutionNodeId, finalLocalMerge);

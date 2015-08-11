@@ -22,20 +22,17 @@
 package io.crate.operation.collect;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.util.concurrent.SettableFuture;
+import io.crate.action.job.SharedShardContexts;
 import io.crate.action.sql.SQLBulkRequest;
 import io.crate.analyze.OrderBy;
 import io.crate.analyze.WhereClause;
 import io.crate.breaker.RamAccountingContext;
-import io.crate.core.collections.Bucket;
-import io.crate.core.collections.CollectionBucket;
 import io.crate.core.collections.Row;
-import io.crate.executor.transport.distributed.ResultProviderBase;
 import io.crate.integrationtests.SQLTransportIntegrationTest;
 import io.crate.jobs.JobContextService;
 import io.crate.jobs.JobExecutionContext;
 import io.crate.metadata.*;
-import io.crate.operation.RowDownstreamHandle;
+import io.crate.operation.RowDownstream;
 import io.crate.operation.RowUpstream;
 import io.crate.operation.operator.EqOperator;
 import io.crate.operation.projectors.ProjectionToProjectorVisitor;
@@ -64,11 +61,15 @@ import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.test.ElasticsearchIntegrationTest;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
 
 import java.io.IOException;
-import java.util.*;
-import java.util.concurrent.CancellationException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static io.crate.testing.TestingHelpers.createReference;
@@ -80,42 +81,20 @@ import static org.mockito.Mockito.when;
 @ElasticsearchIntegrationTest.ClusterScope(scope = ElasticsearchIntegrationTest.Scope.SUITE, numDataNodes = 1)
 public class LuceneDocCollectorTest extends SQLTransportIntegrationTest {
 
-    private static class PausingCollectingProjector extends ResultProviderBase {
+    @Rule
+    public ExpectedException expectedException = ExpectedException.none();
 
-        public final Vector<Object[]> rows = new Vector<>();
-
-        private RowUpstream upstream;
-        private Throwable failure;
-        private int pauseAfter = 5;
-        private boolean finished = false;
-        private SettableFuture finishedCalled = SettableFuture.create();
-
-        @Override
-        public RowDownstreamHandle registerUpstream(RowUpstream upstream) {
-            this.upstream = upstream;
-            return super.registerUpstream(upstream);
-        }
-
-        @Override
-        protected Bucket doFinish() {
-            finished = true;
-            finishedCalled.set(true);
-            return new CollectionBucket(rows);
-        }
-
-        @Override
-        protected Throwable doFail(Throwable t) {
-            failure = t;
-            return t;
-        }
-
+    private static class PausingCollectingProjector extends CollectingProjector {
+        public int pauseAfter = 5;
         @Override
         public boolean setNextRow(Row row) {
-            rows.add(row.materialize());
+            boolean result = super.setNextRow(row);
             if (rows.size() == pauseAfter) {
-                upstream.pause();
+                for (RowUpstream upstream : upstreams) {
+                    upstream.pause();
+                }
             }
-            return true;
+            return result;
         }
     }
 
@@ -194,7 +173,7 @@ public class LuceneDocCollectorTest extends SQLTransportIntegrationTest {
         return createDocCollector(orderBy, limit, toCollect, WhereClause.MATCH_ALL, PAGE_SIZE);
     }
 
-    private LuceneDocCollector createDocCollector(OrderBy orderBy, Integer limit, List<Symbol> toCollect, WhereClause whereClause, int pageSize, ResultProviderBase projector) throws Exception{
+    private LuceneDocCollector createDocCollector(OrderBy orderBy, Integer limit, List<Symbol> toCollect, WhereClause whereClause, int pageSize, RowDownstream projector) throws Exception{
         UUID jobId = UUID.randomUUID();
         CollectPhase node = new CollectPhase(
                 jobId,
@@ -211,11 +190,13 @@ public class LuceneDocCollectorTest extends SQLTransportIntegrationTest {
         node.limit(limit);
 
         ShardProjectorChain projectorChain = mock(ShardProjectorChain.class);
-        when(projectorChain.newShardDownstreamProjector(any(ProjectionToProjectorVisitor.class))).thenReturn(projector);
 
         JobExecutionContext.Builder builder = jobContextService.newBuilder(jobId);
+        when(projectorChain.newShardDownstreamProjector(any(ProjectionToProjectorVisitor.class))).thenReturn(projector);
+        SharedShardContexts sharedShardContexts = new SharedShardContexts(
+                internalCluster().getDataNodeInstance(IndicesService.class));
         jobCollectContext = new JobCollectContext(
-                jobId, node, mock(CollectOperation.class), RAM_ACCOUNTING_CONTEXT, projector);
+                jobId, node, mock(CollectOperation.class), RAM_ACCOUNTING_CONTEXT, projector, sharedShardContexts);
         builder.addSubContext(node.executionPhaseId(), jobCollectContext);
         jobContextService.createContext(builder);
         LuceneDocCollector collector = (LuceneDocCollector)shardCollectService.getCollector(
@@ -250,12 +231,14 @@ public class LuceneDocCollectorTest extends SQLTransportIntegrationTest {
 
     @Test
     public void testOrderedPauseResume() throws Exception {
-        PausingCollectingProjector projection = new PausingCollectingProjector();
+        PausingCollectingProjector projection = createPausingCollector();
+        
         ReferenceIdent populationIdent = new ReferenceIdent(new TableIdent("doc", "countries"), "population");
         Reference population = new Reference(new ReferenceInfo(populationIdent, RowGranularity.DOC, DataTypes.INTEGER));
         OrderBy orderBy = new OrderBy(ImmutableList.of((Symbol)population), new boolean[]{false}, new Boolean[]{false});
         projection.pauseAfter = 3;
-        LuceneDocCollector docCollector = createDocCollector(orderBy, 15, ImmutableList.<Symbol>of(population), WhereClause.MATCH_ALL, PAGE_SIZE, projection);
+        LuceneDocCollector docCollector = createDocCollector(orderBy, 15, ImmutableList.<Symbol>of(population), WhereClause.MATCH_ALL, PAGE_SIZE, 
+                projection);
         docCollector.doCollect(); // start collection
         assertThat(projection.rows.size(), is(3));
         docCollector.resume(false); // continue
@@ -263,12 +246,16 @@ public class LuceneDocCollectorTest extends SQLTransportIntegrationTest {
         for (int i = 0; i < projection.rows.size();  i++) {
             assertThat((Integer)projection.rows.get(i)[0], is(i));
         }
-        assertThat(projection.finished, is(true));
+        assertThat(projection.result().isDone(), is(true));
+    }
+
+    private PausingCollectingProjector createPausingCollector() {
+        return new PausingCollectingProjector();
     }
 
     @Test
     public void testPauseBeforeNextTopNSearch() throws Exception {
-        PausingCollectingProjector projection = new PausingCollectingProjector();
+        CollectingProjector projection = createPausingCollector();
         ReferenceIdent populationIdent = new ReferenceIdent(new TableIdent("doc", "countries"), "population");
         Reference population = new Reference(new ReferenceInfo(populationIdent, RowGranularity.DOC, DataTypes.INTEGER));
         OrderBy orderBy = new OrderBy(ImmutableList.of((Symbol)population), new boolean[]{false}, new Boolean[]{false});
@@ -279,13 +266,13 @@ public class LuceneDocCollectorTest extends SQLTransportIntegrationTest {
         for (int i = 0; i < projection.rows.size();  i++) {
             assertThat((Integer)projection.rows.get(i)[0], is(i));
         }
-        assertThat(projection.finished, is(true));
+        assertThat(projection.result().isDone(), is(true));
     }
 
     @SuppressWarnings("unchecked")
     @Test
     public void testUnorderedPauseResume() throws Exception {
-        PausingCollectingProjector projector = new PausingCollectingProjector();
+        PausingCollectingProjector projector = createPausingCollector();
         ReferenceIdent populationIdent = new ReferenceIdent(new TableIdent("doc", "countries"), "population");
         Reference population = new Reference(new ReferenceInfo(populationIdent, RowGranularity.DOC, DataTypes.INTEGER));
         projector.pauseAfter = NUMBER_OF_DOCS - 1;
@@ -303,7 +290,7 @@ public class LuceneDocCollectorTest extends SQLTransportIntegrationTest {
 
     @Test
     public void testAsynchronousResume() throws Exception {
-        PausingCollectingProjector projector = new PausingCollectingProjector();
+        PausingCollectingProjector projector = createPausingCollector();
         ReferenceIdent populationIdent = new ReferenceIdent(new TableIdent("doc", "countries"), "population");
         Reference population = new Reference(new ReferenceInfo(populationIdent, RowGranularity.DOC, DataTypes.INTEGER));
         projector.pauseAfter = NUMBER_OF_DOCS - 100;
@@ -313,7 +300,7 @@ public class LuceneDocCollectorTest extends SQLTransportIntegrationTest {
         docCollector.resume(true);
         assertThat(projector.rows.size(), lessThan(NUMBER_OF_DOCS));
         // wait till collector is finished
-        projector.finishedCalled.get(10, TimeUnit.SECONDS);
+        projector.result().get(10, TimeUnit.SECONDS);
         assertThat(projector.rows.size(), is(NUMBER_OF_DOCS));
         assertThat(new ArrayList<>(projector.rows), containsInAnyOrder(new ArrayList() {{
             for (int i = 0; i < NUMBER_OF_DOCS; i++) {
@@ -324,13 +311,12 @@ public class LuceneDocCollectorTest extends SQLTransportIntegrationTest {
 
     @Test
     public void testKillWhilePaused() throws Exception {
-        PausingCollectingProjector projector = new PausingCollectingProjector();
+        PausingCollectingProjector projector = createPausingCollector();
         LuceneDocCollector docCollector = createDocCollector(orderBy, 15, orderBy.orderBySymbols(), WhereClause.MATCH_ALL, PAGE_SIZE, projector);
         docCollector.doCollect();
         assertThat(projector.rows.size(), is(5));
         docCollector.kill(null);
-        assertThat(projector.failure, is(instanceOf(CancellationException.class)));
-        assertThat(projector.finished, is(false));
+        assertTrue(projector.result().isCancelled());
     }
 
     @Test
@@ -497,9 +483,12 @@ public class LuceneDocCollectorTest extends SQLTransportIntegrationTest {
         );
         node.orderBy(orderBy);
 
+        SharedShardContexts sharedShardContexts = new SharedShardContexts(
+                internalCluster().getDataNodeInstance(IndicesService.class));
+
         JobExecutionContext.Builder builder = jobContextService.newBuilder(node.jobId());
         builder.addSubContext(node.executionPhaseId(),
-                new JobCollectContext(node.jobId(), node, mock(CollectOperation.class), RAM_ACCOUNTING_CONTEXT, collectingProjector));
+                new JobCollectContext(node.jobId(), node, mock(CollectOperation.class), RAM_ACCOUNTING_CONTEXT, collectingProjector, sharedShardContexts));
         jobContextService.createContext(builder);
 
         ShardProjectorChain projectorChain = mock(ShardProjectorChain.class);
@@ -522,10 +511,13 @@ public class LuceneDocCollectorTest extends SQLTransportIntegrationTest {
                 "2| NULL\n";
         assertEquals(expected, TestingHelpers.printedTable(collectingProjector.doFinish()));
 
+        sharedShardContexts = new SharedShardContexts(
+                internalCluster().getDataNodeInstance(IndicesService.class));
+
         // Nulls first
         builder = jobContextService.newBuilder(node.jobId());
         builder.addSubContext(node.executionPhaseId(),
-                new JobCollectContext(node.jobId(), node, mock(CollectOperation.class), RAM_ACCOUNTING_CONTEXT, collectingProjector));
+                new JobCollectContext(node.jobId(), node, mock(CollectOperation.class), RAM_ACCOUNTING_CONTEXT, collectingProjector, sharedShardContexts));
         jobContextService.createContext(builder);
         jobCollectContext = jobContextService.getContext(node.jobId()).getSubContext(node.executionPhaseId());
 

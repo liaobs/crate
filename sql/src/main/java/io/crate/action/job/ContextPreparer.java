@@ -88,16 +88,17 @@ public class ContextPreparer {
 
     public void prepare(UUID jobId,
                         NodeOperation nodeOperation,
+                        SharedShardContexts sharedShardContexts,
                         JobExecutionContext.Builder contextBuilder,
                         @Nullable RowDownstream rowDownstream) {
-        PreparerContext preparerContext = new PreparerContext(jobId, nodeOperation, rowDownstream);
+        PreparerContext preparerContext = new PreparerContext(sharedShardContexts, jobId, nodeOperation, rowDownstream);
         ExecutionSubContext subContext = innerPreparer.process(nodeOperation.executionPhase(), preparerContext);
         contextBuilder.addSubContext(nodeOperation.executionPhase().executionPhaseId(), subContext);
     }
 
     @SuppressWarnings("unchecked")
     public <T extends ExecutionSubContext> T prepare(UUID jobId, ExecutionPhase executionPhase, RowDownstream rowDownstream) {
-        PreparerContext preparerContext = new PreparerContext(jobId, null, rowDownstream);
+        PreparerContext preparerContext = new PreparerContext(null, jobId, null, rowDownstream);
         return (T) innerPreparer.process(executionPhase, preparerContext);
     }
 
@@ -107,10 +108,16 @@ public class ContextPreparer {
         private final NodeOperation nodeOperation;
         private final RowDownstream rowDownstream;
 
-        private PreparerContext(UUID jobId, NodeOperation nodeOperation, @Nullable RowDownstream rowDownstream) {
+        private final SharedShardContexts sharedShardContexts;
+
+        private PreparerContext(@Nullable SharedShardContexts sharedShardContexts,
+                                UUID jobId,
+                                NodeOperation nodeOperation,
+                                RowDownstream rowDownstream) {
             this.nodeOperation = nodeOperation;
             this.jobId = jobId;
             this.rowDownstream = rowDownstream;
+            this.sharedShardContexts = sharedShardContexts;
         }
     }
 
@@ -145,7 +152,8 @@ public class ContextPreparer {
                     countOperation,
                     context.rowDownstream,
                     indexShardMap,
-                    phase.whereClause()
+                    phase.whereClause(),
+                    context.sharedShardContexts
             );
         }
 
@@ -193,7 +201,8 @@ public class ContextPreparer {
                     phase,
                     collectOperation,
                     ramAccountingContext,
-                    downstream
+                    downstream,
+                    context.sharedShardContexts
             );
         }
     }
