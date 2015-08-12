@@ -55,9 +55,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class FetchProjector extends RowDownstreamAndHandle implements Projector {
 
-    public static final int NO_BULK_REQUESTS = -1;
-
-
     private PositionalBucketMerger downstream;
     private final TransportFetchNodeAction transportFetchNodeAction;
     private final TransportCloseContextNodeAction transportCloseContextNodeAction;

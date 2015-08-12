@@ -23,6 +23,7 @@ package io.crate.jobs;
 
 import com.google.common.base.Throwables;
 import io.crate.Streamer;
+import io.crate.action.job.SharedShardContexts;
 import io.crate.breaker.RamAccountingContext;
 import io.crate.operation.PageDownstream;
 import io.crate.operation.RowDownstream;
@@ -109,7 +110,8 @@ public class JobExecutionContextTest extends CrateUnitTest {
                 mock(CollectPhase.class),
                 mock(CollectOperation.class),
                 mock(RamAccountingContext.class),
-                mock(RowDownstream.class));
+                mock(RowDownstream.class),
+                mock(SharedShardContexts.class));
         PageDownstreamContext pageDownstreamContext = spy(new PageDownstreamContext(
                 "dummy",
                 mock(PageDownstream.class),

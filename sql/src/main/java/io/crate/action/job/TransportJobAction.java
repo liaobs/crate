@@ -93,18 +93,27 @@ public class TransportJobAction implements NodeAction<JobRequest, JobResponse> {
 
         List<ListenableFuture<Bucket>> directResponseFutures = new ArrayList<>();
         SharedShardContexts sharedShardContexts = new SharedShardContexts(indicesService);
-        for (NodeOperation nodeOperation : request.nodeOperations()) {
-            SingleBucketBuilder bucketBuilder = null;
-            if (ExecutionPhases.hasDirectResponseDownstream(nodeOperation.downstreamNodes())) {
-                Streamer<?>[] streamers = StreamerVisitor.streamerFromOutputs(nodeOperation.executionPhase());
-                bucketBuilder = new SingleBucketBuilder(streamers);
-                directResponseFutures.add(bucketBuilder.result());
+        JobExecutionContext context = null;
+        try {
+            for (NodeOperation nodeOperation : request.nodeOperations()) {
+                SingleBucketBuilder bucketBuilder = null;
+                if (ExecutionPhases.hasDirectResponseDownstream(nodeOperation.downstreamNodes())) {
+                    Streamer<?>[] streamers = StreamerVisitor.streamerFromOutputs(nodeOperation.executionPhase());
+                    bucketBuilder = new SingleBucketBuilder(streamers);
+                    directResponseFutures.add(bucketBuilder.result());
+                }
+                contextPreparer.prepare(request.jobId(), nodeOperation, sharedShardContexts, contextBuilder,
+                        bucketBuilder, request.nodeOperations());
             }
-            contextPreparer.prepare(request.jobId(), nodeOperation, sharedShardContexts, contextBuilder, bucketBuilder);
+            context = jobContextService.createContext(contextBuilder);
+            context.start();
+        } catch (Throwable t) {
+            if (context != null) {
+                context.close();
+            }
+            actionListener.onFailure(t);
+            return;
         }
-
-        JobExecutionContext context = jobContextService.createContext(contextBuilder);
-        context.start();
 
         if (directResponseFutures.size() == 0) {
             actionListener.onResponse(new JobResponse());

@@ -23,6 +23,7 @@ package io.crate.executor.transport;
 
 import com.google.common.base.Function;
 import com.google.common.collect.FluentIterable;
+import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import io.crate.action.job.*;
@@ -110,7 +111,7 @@ public class ExecutionPhasesTask extends JobTask {
         List<PageDownstreamContext> pageDownstreamContexts = new ArrayList<>(nodeOperationTrees.size());
         for (NodeOperationTree nodeOperationTree : nodeOperationTrees) {
             DownstreamExecutionSubContext executionSubContext =
-                    contextPreparer.prepare(jobId(), nodeOperationTree.leaf(), rowDownstream);
+                    contextPreparer.prepare(jobId(), nodeOperationTree.leaf(), rowDownstream, ImmutableList.<NodeOperation>of());
             if (operationByServer.isEmpty()) {
                 executionSubContext.close();
                 continue;
@@ -166,7 +167,7 @@ public class ExecutionPhasesTask extends JobTask {
         if (localNodeOperations != null) {
             SharedShardContexts sharedShardContexts = new SharedShardContexts(indicesService);
             for (NodeOperation nodeOperation : localNodeOperations) {
-                contextPreparer.prepare(jobId(), nodeOperation, sharedShardContexts, builder, null);
+                contextPreparer.prepare(jobId(), nodeOperation, sharedShardContexts, builder, null, localNodeOperations);
             }
         }
         builder.addSubContext(localMergeExecutionNodeId, finalLocalMerge);

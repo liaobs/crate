@@ -233,7 +233,7 @@ public class DocLevelCollectTest extends SQLTransportIntegrationTest {
         NodeOperation nodeOperation = NodeOperation.withDownstream(collectNode, mock(ExecutionPhase.class), (byte) 0);
         Streamer<?>[] streamers = StreamerVisitor.streamerFromOutputs(nodeOperation.executionPhase());
         SingleBucketBuilder bucketBuilder = new SingleBucketBuilder(streamers);
-        contextPreparer.prepare(collectNode.jobId(), nodeOperation, sharedShardContexts, builder, bucketBuilder);
+        contextPreparer.prepare(collectNode.jobId(), nodeOperation, sharedShardContexts, builder, bucketBuilder, Collections.<NodeOperation>emptyList());
         JobExecutionContext context = contextService.createContext(builder);
         context.start();
         return bucketBuilder.result().get(2, TimeUnit.SECONDS);

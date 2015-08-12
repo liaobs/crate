@@ -21,8 +21,11 @@
 
 package io.crate.action.job;
 
+import com.google.common.base.Function;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Optional;
+import com.google.common.base.Predicates;
+import com.google.common.collect.FluentIterable;
 import io.crate.breaker.CrateCircuitBreakerService;
 import io.crate.breaker.RamAccountingContext;
 import io.crate.jobs.CountContext;
@@ -34,6 +37,7 @@ import io.crate.operation.*;
 import io.crate.operation.collect.JobCollectContext;
 import io.crate.operation.collect.MapSideDataCollectOperation;
 import io.crate.operation.count.CountOperation;
+import io.crate.operation.fetch.FetchContext;
 import io.crate.operation.projectors.FlatProjectorChain;
 import io.crate.operation.projectors.RowDownstreamFactory;
 import io.crate.planner.distribution.UpstreamPhase;
@@ -42,6 +46,7 @@ import io.crate.planner.node.ExecutionPhaseVisitor;
 import io.crate.planner.node.dql.CollectPhase;
 import io.crate.planner.node.dql.CountPhase;
 import io.crate.planner.node.dql.MergePhase;
+import io.crate.planner.node.fetch.FetchPhase;
 import io.crate.types.DataTypes;
 import org.elasticsearch.cluster.ClusterService;
 import org.elasticsearch.common.breaker.CircuitBreaker;
@@ -90,15 +95,19 @@ public class ContextPreparer {
                         NodeOperation nodeOperation,
                         SharedShardContexts sharedShardContexts,
                         JobExecutionContext.Builder contextBuilder,
-                        @Nullable RowDownstream rowDownstream) {
-        PreparerContext preparerContext = new PreparerContext(sharedShardContexts, jobId, nodeOperation, rowDownstream);
+                        @Nullable RowDownstream rowDownstream,
+                        Iterable<? extends NodeOperation> nodeOperations) {
+        PreparerContext preparerContext = new PreparerContext(sharedShardContexts, jobId, nodeOperation, rowDownstream, nodeOperations);
         ExecutionSubContext subContext = innerPreparer.process(nodeOperation.executionPhase(), preparerContext);
         contextBuilder.addSubContext(nodeOperation.executionPhase().executionPhaseId(), subContext);
     }
 
     @SuppressWarnings("unchecked")
-    public <T extends ExecutionSubContext> T prepare(UUID jobId, ExecutionPhase executionPhase, RowDownstream rowDownstream) {
-        PreparerContext preparerContext = new PreparerContext(null, jobId, null, rowDownstream);
+    public <T extends ExecutionSubContext> T prepare(UUID jobId,
+                                                     ExecutionPhase executionPhase,
+                                                     RowDownstream rowDownstream,
+                                                     Iterable<? extends NodeOperation> nodeOperations) {
+        PreparerContext preparerContext = new PreparerContext(null, jobId, null, rowDownstream, nodeOperations);
         return (T) innerPreparer.process(executionPhase, preparerContext);
     }
 
@@ -108,13 +117,16 @@ public class ContextPreparer {
         private final NodeOperation nodeOperation;
         private final RowDownstream rowDownstream;
 
+        private final Iterable<? extends NodeOperation> nodeOperations;
         private final SharedShardContexts sharedShardContexts;
 
         private PreparerContext(@Nullable SharedShardContexts sharedShardContexts,
                                 UUID jobId,
                                 NodeOperation nodeOperation,
-                                RowDownstream rowDownstream) {
+                                RowDownstream rowDownstream,
+                                Iterable<? extends NodeOperation> nodeOperations) {
             this.nodeOperation = nodeOperation;
+            this.nodeOperations = nodeOperations;
             this.jobId = jobId;
             this.rowDownstream = rowDownstream;
             this.sharedShardContexts = sharedShardContexts;
@@ -204,6 +216,35 @@ public class ContextPreparer {
                     downstream,
                     context.sharedShardContexts
             );
+        }
+
+        @Override
+        public ExecutionSubContext visitFetchPhase(final FetchPhase phase, final PreparerContext context) {
+            final FluentIterable<Routing> routings = FluentIterable.from(context.nodeOperations)
+                    .transform(new Function<NodeOperation, ExecutionPhase>() {
+                @Nullable
+                @Override
+                public ExecutionPhase apply(NodeOperation input) {
+                    return input.executionPhase();
+                }
+            }).transform(new Function<ExecutionPhase, Routing>() {
+                        @Nullable
+                        @Override
+                        public Routing apply(@Nullable ExecutionPhase input) {
+                            if (input == null) {
+                                return null;
+                            }
+                            if (phase.collectPhaseIds().contains(input.executionPhaseId())) {
+                                assert input instanceof CollectPhase :
+                                        "fetchPhase.collectPhaseIds must only contain ids of executionPhases that are an instanceof CollectPhase";
+                                return ((CollectPhase) input).routing();
+                            }
+                            return null;
+                        }
+                    }).filter(Predicates.notNull());
+
+            String localNodeId = clusterService.localNode().id();
+            return new FetchContext(localNodeId, context.sharedShardContexts, routings);
         }
     }
 }

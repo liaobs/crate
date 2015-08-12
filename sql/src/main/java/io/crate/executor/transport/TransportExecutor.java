@@ -403,7 +403,11 @@ public class TransportExecutor implements Executor, TaskExecutor {
              * it should be called first for MergePhase and then for CollectPhase
              */
             public void addPhase(@Nullable ExecutionPhase executionPhase) {
-                addPhase(executionPhase, nodeOperations);
+                addPhase(executionPhase, nodeOperations, true);
+            }
+
+            public void addContextPhase(@Nullable ExecutionPhase executionPhase) {
+                addPhase(executionPhase, nodeOperations, false);
             }
 
             /**
@@ -412,10 +416,12 @@ public class TransportExecutor implements Executor, TaskExecutor {
              * to avoid race conditions.
              */
             public void addCollectExecutionPhase(@Nullable ExecutionPhase executionPhase) {
-                addPhase(executionPhase, collectNodeOperations);
+                addPhase(executionPhase, collectNodeOperations, true);
             }
 
-            private void addPhase(@Nullable ExecutionPhase executionPhase, List<NodeOperation> nodeOperations) {
+            private void addPhase(@Nullable ExecutionPhase executionPhase,
+                                  List<NodeOperation> nodeOperations,
+                                  boolean setDownstreamNodes) {
                 if (executionPhase == null) {
                     return;
                 }
@@ -425,8 +431,12 @@ public class TransportExecutor implements Executor, TaskExecutor {
                 }
 
                 ExecutionPhase previousPhase;
-                previousPhase = currentBranch.lastElement();
-                nodeOperations.add(NodeOperation.withDownstream(executionPhase, previousPhase, (byte) 0));
+                if (setDownstreamNodes) {
+                    previousPhase = currentBranch.lastElement();
+                    nodeOperations.add(NodeOperation.withDownstream(executionPhase, previousPhase, (byte) 0));
+                } else {
+                    nodeOperations.add(NodeOperation.withoutDownstream(executionPhase));
+                }
                 currentBranch.add(executionPhase);
             }
 
@@ -474,6 +484,12 @@ public class TransportExecutor implements Executor, TaskExecutor {
         public Void visitCollectAndMerge(CollectAndMerge plan, NodeOperationTreeContext context) {
             context.addPhase(plan.localMerge());
             context.addCollectExecutionPhase(plan.collectPhase());
+            return null;
+        }
+
+        public Void visitQueryThenFetch(QueryThenFetch node, NodeOperationTreeContext context) {
+            visitCollectAndMerge(node, context);
+            context.addContextPhase(node.fetchPhase());
             return null;
         }
 
