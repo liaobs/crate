@@ -17,6 +17,80 @@ public class Routing implements Streamable {
     private volatile int numShards = -1;
     private int jobSearchContextIdBase = -1;
 
+    public static abstract class RoutingLocationVisitor {
+
+        public boolean visitLocations(Map<String, Map<String, List<Integer>>> locations){
+            return true;
+        }
+
+        public boolean visitNode(String nodeId, Map<String, List<Integer>> nodeRouting) {
+            return true;
+        }
+
+        public boolean visitIndex(String nodeId, String index, List<Integer> shardIds) {
+            return true;
+        }
+
+        public boolean visitShard(String nodeId, String index, Integer shardId) {
+            return false;
+        }
+    }
+
+    public static class LocationBuildingVisitor extends RoutingLocationVisitor{
+
+        private Map<String, Map<String, List<Integer>>> result;
+
+        @Override
+        public boolean visitLocations(Map<String, Map<String, List<Integer>>> locations) {
+            result = new HashMap<>(locations.size());
+            return true;
+        }
+
+        @Override
+        public boolean visitShard(String nodeId, String index, Integer shardId) {
+            Map<String, List<Integer>> location = result.get(nodeId);
+            if (location==null){
+                location = new HashMap<>();
+                result.put(nodeId, location);
+            } else {
+                List<Integer> indexEntry = location.get(index);
+                if (indexEntry == null){
+                    indexEntry = new ArrayList<>();
+                    location.put(index, indexEntry);
+                }
+                indexEntry.add(shardId);
+            }
+            return true;
+        }
+
+        public Map<String, Map<String, List<Integer>>> build(){
+            return result;
+        }
+
+    }
+
+    public void walkLocations(RoutingLocationVisitor visitor) {
+        if (locations == null || !visitor.visitLocations(locations)) {
+            return;
+        }
+        for (Map.Entry<String, Map<String, List<Integer>>> location : locations.entrySet()) {
+            if (!visitor.visitNode(location.getKey(), location.getValue())) {
+                break;
+            }
+            for (Map.Entry<String, List<Integer>> entry : location.getValue().entrySet()) {
+                if (!visitor.visitIndex(location.getKey(), entry.getKey(), entry.getValue())) {
+                    break;
+                }
+                for (Integer shardId : entry.getValue()) {
+                    //noinspection ConstantConditions
+                    if (!visitor.visitShard(location.getKey(), entry.getKey(), shardId)) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     public Routing() {
 
     }
@@ -25,6 +99,7 @@ public class Routing implements Streamable {
         assert assertLocationsAllTreeMap(locations) : "locations must be a TreeMap only and must contain only TreeMap's";
         this.locations = locations;
     }
+
 
     public static Routing filter(Routing routing, String includeTableName) {
         assert routing.hasLocations();
@@ -56,9 +131,9 @@ public class Routing implements Streamable {
 
     /**
      * @return a map with the locations in the following format: <p>
-     *  Map&lt;nodeName (string), <br>
-     *  &nbsp;&nbsp;&nbsp;&nbsp;Map&lt;indexName (string), List&lt;ShardId (int)&gt;&gt;&gt; <br>
-     *  </p>
+     * Map&lt;nodeName (string), <br>
+     * &nbsp;&nbsp;&nbsp;&nbsp;Map&lt;indexName (string), List&lt;ShardId (int)&gt;&gt;&gt; <br>
+     * </p>
      */
     @Nullable
     public Map<String, Map<String, List<Integer>>> locations() {
@@ -78,6 +153,7 @@ public class Routing implements Streamable {
 
     /**
      * get the number of shards in this routing for a node with given nodeId
+     *
      * @return int &gt;= 0
      */
     public int numShards(String nodeId) {
@@ -97,6 +173,7 @@ public class Routing implements Streamable {
 
     /**
      * get the number of shards in this routing
+     *
      * @return int &gt;= 0
      */
     public int numShards() {
@@ -185,7 +262,7 @@ public class Routing implements Streamable {
                     String key = in.readString();
                     int numShards = in.readVInt();
                     List<Integer> shardIds = new ArrayList<>(numShards);
-                    for (int k = 0; k<numShards;k++){
+                    for (int k = 0; k < numShards; k++) {
                         shardIds.add(in.readVInt());
                     }
                     innerMap.put(key, shardIds);

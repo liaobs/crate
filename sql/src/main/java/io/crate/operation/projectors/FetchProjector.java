@@ -45,7 +45,6 @@ import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.Loggers;
-import org.elasticsearch.index.shard.ShardId;
 
 import javax.annotation.Nullable;
 import java.util.*;
@@ -64,8 +63,8 @@ public class FetchProjector extends RowDownstreamAndHandle implements Projector 
     private final CollectExpression<Row, ?> collectDocIdExpression;
     private final List<ReferenceInfo> partitionedBy;
     private final List<Reference> toFetchReferences;
-    private final IntObjectOpenHashMap<String> jobSearchContextIdToNode;
-    private final IntObjectOpenHashMap<ShardId> jobSearchContextIdToShard;
+    private final IntObjectOpenHashMap<String> readerNodes;
+    private final TreeMap<Integer, String> readerIndices;
     private final RowDelegate collectRowDelegate = new RowDelegate();
     private final RowDelegate fetchRowDelegate = new RowDelegate();
     private final RowDelegate partitionRowDelegate = new RowDelegate();
@@ -98,8 +97,8 @@ public class FetchProjector extends RowDownstreamAndHandle implements Projector 
                           List<Symbol> inputSymbols,
                           List<Symbol> outputSymbols,
                           List<ReferenceInfo> partitionedBy,
-                          IntObjectOpenHashMap<String> jobSearchContextIdToNode,
-                          IntObjectOpenHashMap<ShardId> jobSearchContextIdToShard,
+                          IntObjectOpenHashMap<String> readerNodes,
+                          TreeMap<Integer, String> readerIndices,
                           Set<String> executionNodes) {
         this.transportFetchNodeAction = transportFetchNodeAction;
         this.transportCloseContextNodeAction = transportCloseContextNodeAction;
@@ -107,8 +106,8 @@ public class FetchProjector extends RowDownstreamAndHandle implements Projector 
         this.executionPhaseId = executionPhaseId;
         this.collectDocIdExpression = collectDocIdExpression;
         this.partitionedBy = partitionedBy;
-        this.jobSearchContextIdToNode = jobSearchContextIdToNode;
-        this.jobSearchContextIdToShard = jobSearchContextIdToShard;
+        this.readerNodes = readerNodes;
+        this.readerIndices = readerIndices;
         numNodes = executionNodes.size();
         this.executionNodes = new ArrayList<>(executionNodes);
         nodesWithOpenContexts = Sets.newConcurrentHashSet(executionNodes);
@@ -168,8 +167,10 @@ public class FetchProjector extends RowDownstreamAndHandle implements Projector 
         long docId = (Long)collectDocIdExpression.value();
         int jobSearchContextId = (int)(docId >> 32);
 
-        String nodeId = jobSearchContextIdToNode.get(jobSearchContextId);
-        String index = jobSearchContextIdToShard.get(jobSearchContextId).getIndex();
+        String nodeId = readerNodes.get(jobSearchContextId);
+        assert nodeId != null;
+        String index = readerIndices.floorEntry(jobSearchContextId).getValue();
+        assert index != null;
 
         NodeBucket nodeBucket = nodeBuckets.get(nodeId);
         if (nodeBucket == null) {

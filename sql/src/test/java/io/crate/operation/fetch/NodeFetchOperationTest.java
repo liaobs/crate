@@ -43,6 +43,7 @@ import org.junit.Test;
 
 import java.util.Collections;
 import java.util.Locale;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -91,7 +92,11 @@ public class NodeFetchOperationTest extends CrateUnitTest {
     public void testFetchOperationNoCollectContext() throws Exception {
         UUID jobId = UUID.randomUUID();
         JobExecutionContext.Builder builder = jobContextService.newBuilder(jobId);
-        builder.addSubContext(1, new FetchContext("dummyNodeId", mock(SharedShardContexts.class), Collections.<Routing>emptyList()));
+        builder.addSubContext(1, new FetchContext(
+                "dummyNodeId",
+                mock(SharedShardContexts.class),
+                Collections.<Routing>emptyList(),
+                new TreeMap<String, Integer>()));
         jobContextService.createContext(builder);
 
         NodeFetchOperation nodeFetchOperation = new NodeFetchOperation(

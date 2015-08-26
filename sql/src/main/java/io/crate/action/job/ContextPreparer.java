@@ -244,7 +244,7 @@ public class ContextPreparer {
                     }).filter(Predicates.notNull());
 
             String localNodeId = clusterService.localNode().id();
-            return new FetchContext(localNodeId, context.sharedShardContexts, routings);
+            return new FetchContext(localNodeId, context.sharedShardContexts, routings, phase.bases());
         }
     }
 }

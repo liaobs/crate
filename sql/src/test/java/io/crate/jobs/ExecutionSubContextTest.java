@@ -32,6 +32,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -166,7 +167,8 @@ public class ExecutionSubContextTest extends CrateUnitTest {
         return new FetchContext(
                 "dummy",
                 new SharedShardContexts(mock(IndicesService.class)),
-                Collections.<Routing>emptyList());
+                Collections.<Routing>emptyList(),
+                new TreeMap<String, Integer>());
     }
 
     @Test

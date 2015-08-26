@@ -62,10 +62,7 @@ import io.crate.types.DataType;
 import io.crate.types.DataTypes;
 import org.junit.Test;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 import static io.crate.testing.TestingHelpers.isRow;
@@ -150,8 +147,11 @@ public class TransportExecutorTest extends BaseTransportExecutorTest {
                 ctx.jobId(),
                 ctx.nextExecutionPhaseId(),
                 ImmutableSet.of(collectPhase.executionPhaseId()),
-                collectPhase.executionNodes()
+                collectPhase.executionNodes(),
+                ctx.buildReaderAllocations().bases()
         );
+
+
         FetchProjection fetchProjection = getFetchProjection(characters, collectSymbols, outputSymbols, fetchPhase, ctx);
 
         MergePhase localMergeNode = MergePhase.localMerge(
@@ -178,13 +178,11 @@ public class TransportExecutorTest extends BaseTransportExecutorTest {
                                          List<Symbol> collectSymbols,
                                          ImmutableList<Projection> projections,
                                          WhereClause whereClause) {
-        final Routing routing = tableInfo.getRouting(whereClause, null);
-        ctx.allocateJobSearchContextIds(routing);
         return new CollectPhase(
                 ctx.jobId(),
                 ctx.nextExecutionPhaseId(),
                 "collect",
-                routing,
+                ctx.allocateRouting(tableInfo, whereClause, null),
                 RowGranularity.DOC,
                 collectSymbols,
                 projections,
@@ -216,7 +214,8 @@ public class TransportExecutorTest extends BaseTransportExecutorTest {
                 ctx.jobId(),
                 ctx.nextExecutionPhaseId(),
                 ImmutableSet.of(collectNode.executionPhaseId()),
-                collectNode.executionNodes()
+                collectNode.executionNodes(),
+                ctx.buildReaderAllocations().bases()
         );
         FetchProjection fetchProjection = getFetchProjection(characters, collectSymbols, outputSymbols, fetchPhase, ctx);
 
@@ -240,14 +239,14 @@ public class TransportExecutorTest extends BaseTransportExecutorTest {
                                                List<Symbol> outputSymbols,
                                                FetchPhase fetchPhase,
                                                Planner.Context ctx) {
+        Planner.Context.ReaderAllocations readerAllocations = ctx.buildReaderAllocations();
         return new FetchProjection(
                 fetchPhase.executionPhaseId(),
                 new InputColumn(0, DataTypes.STRING), collectSymbols, outputSymbols,
                 characters.partitionedByColumns(),
                 fetchPhase.executionNodes(),
-                ctx.jobSearchContextIdToNode(),
-                ctx.jobSearchContextIdToShard()
-        );
+                readerAllocations.nodes(),
+                readerAllocations.indices());
     }
 
     @Test
@@ -285,7 +284,8 @@ public class TransportExecutorTest extends BaseTransportExecutorTest {
                 ctx.jobId(),
                 ctx.nextExecutionPhaseId(),
                 ImmutableSet.of(collectNode.executionPhaseId()),
-                collectNode.executionNodes()
+                collectNode.executionNodes(),
+                ctx.buildReaderAllocations().bases()
         );
         FetchProjection fetchProjection = getFetchProjection(characters, collectSymbols, outputSymbols, fetchPhase, ctx);
 
@@ -365,7 +365,8 @@ public class TransportExecutorTest extends BaseTransportExecutorTest {
                 ctx.jobId(),
                 ctx.nextExecutionPhaseId(),
                 ImmutableSet.of(collectNode.executionPhaseId()),
-                collectNode.executionNodes()
+                collectNode.executionNodes(),
+                ctx.buildReaderAllocations().bases()
         );
         FetchProjection fetchProjection = getFetchProjection(searchf, collectSymbols, Arrays.asList(id_ref, function), fetchPhase, ctx);
 
@@ -408,7 +409,8 @@ public class TransportExecutorTest extends BaseTransportExecutorTest {
                 ctx.jobId(),
                 ctx.nextExecutionPhaseId(),
                 ImmutableSet.of(collectNode.executionPhaseId()),
-                collectNode.executionNodes()
+                collectNode.executionNodes(),
+                ctx.buildReaderAllocations().bases()
         );
         FetchProjection fetchProjection = getFetchProjection(parted, collectSymbols, outputSymbols, fetchPhase, ctx);
 
