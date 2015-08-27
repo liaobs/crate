@@ -21,6 +21,7 @@
 
 package io.crate.operation.projectors;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import io.crate.Streamer;
 import io.crate.executor.transport.distributed.*;
@@ -34,6 +35,7 @@ import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.inject.Singleton;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.UUID;
 
@@ -55,25 +57,35 @@ public class InternalRowDownstreamFactory implements RowDownstreamFactory {
                                           UUID jobId,
                                           int pageSize) {
         Streamer<?>[] streamers = StreamerVisitor.streamerFromOutputs(nodeOperation.executionPhase());
-        assert !ExecutionPhases.hasDirectResponseDownstream(nodeOperation.downstreamNodes());
-        assert nodeOperation.downstreamNodes().size() > 0 : "must have at least one downstream";
+        Collection<String> downstreamNodeIds = nodeOperation.downstreamNodes();
+        assert !ExecutionPhases.hasDirectResponseDownstream(downstreamNodeIds);
+        assert downstreamNodeIds.size() > 0 : "must have at least one downstream";
 
         // TODO: set bucketIdx properly
         ArrayList<String> server = Lists.newArrayList(nodeOperation.executionPhase().executionNodes());
         Collections.sort(server);
-        int bucketIdx = Math.max(server.indexOf(clusterService.localNode().id()), 0);
+        String localNodeId = clusterService.localNode().id();
+        int bucketIdx = Math.max(server.indexOf(localNodeId), 0);
 
         MultiBucketBuilder multiBucketBuilder;
+
+        // TODO: optimize this to by-pass transport / paging and access RowDownstream of the target-context directly
+        // if it is on the same node
         switch (distributionType) {
             case MODULO:
-                if (nodeOperation.downstreamNodes().size() == 1) {
-                    multiBucketBuilder = new BroadcastingBucketBuilder(streamers, nodeOperation.downstreamNodes().size());
+                if (downstreamNodeIds.size() == 1) {
+                    multiBucketBuilder = new BroadcastingBucketBuilder(streamers, downstreamNodeIds.size());
                 } else {
-                    multiBucketBuilder = new ModuloBucketBuilder(streamers, nodeOperation.downstreamNodes().size());
+                    multiBucketBuilder = new ModuloBucketBuilder(streamers, downstreamNodeIds.size());
                 }
                 break;
             case BROADCAST:
-                multiBucketBuilder = new BroadcastingBucketBuilder(streamers, nodeOperation.downstreamNodes().size());
+                multiBucketBuilder = new BroadcastingBucketBuilder(streamers, downstreamNodeIds.size());
+                break;
+            case SAME_NODE:
+                bucketIdx = 0;
+                multiBucketBuilder = new BroadcastingBucketBuilder(streamers, 1);
+                downstreamNodeIds = ImmutableList.of(localNodeId);
                 break;
             default:
                 throw new UnsupportedOperationException("Can't handle distributionType: " + distributionType);
@@ -85,7 +97,7 @@ public class InternalRowDownstreamFactory implements RowDownstreamFactory {
                 nodeOperation.downstreamExecutionPhaseId(),
                 nodeOperation.downstreamExecutionPhaseInputId(),
                 bucketIdx,
-                nodeOperation.downstreamNodes(),
+                downstreamNodeIds,
                 transportDistributedResultAction,
                 streamers,
                 pageSize

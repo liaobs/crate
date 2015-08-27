@@ -23,6 +23,7 @@ package io.crate.planner.node.dql;
 
 import io.crate.planner.PlanAndPlannedAnalyzedRelation;
 import io.crate.planner.PlanVisitor;
+import io.crate.planner.distribution.DistributionType;
 import io.crate.planner.projection.Projection;
 
 import java.util.UUID;
@@ -60,6 +61,11 @@ public class CountPlan extends PlanAndPlannedAnalyzedRelation{
     @Override
     public void addProjection(Projection projection) {
         mergeNode.addProjection(projection);
+    }
+
+    @Override
+    public void setDistributionType(DistributionType distributionType) {
+        mergeNode.distributionType(distributionType);
     }
 
     @Override

@@ -26,6 +26,7 @@ import com.google.common.base.Optional;
 import io.crate.planner.Plan;
 import io.crate.planner.PlanAndPlannedAnalyzedRelation;
 import io.crate.planner.PlanVisitor;
+import io.crate.planner.distribution.DistributionType;
 import io.crate.planner.node.dql.DQLPlanNode;
 import io.crate.planner.node.dql.MergePhase;
 import io.crate.planner.projection.Projection;
@@ -74,6 +75,11 @@ public class InsertFromSubQuery extends PlanAndPlannedAnalyzedRelation {
     @Override
     public boolean resultIsDistributed() {
         throw new UnsupportedOperationException("resultIsDistributed is not supported");
+    }
+
+    @Override
+    public void setDistributionType(DistributionType distributionType) {
+        throw new UnsupportedOperationException("setDistributionType not supported");
     }
 
     @Override

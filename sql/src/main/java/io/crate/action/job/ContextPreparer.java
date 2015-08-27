@@ -230,7 +230,7 @@ public class ContextPreparer {
         public ExecutionSubContext visitNestedLoopPhase(NestedLoopPhase phase, PreparerContext context) {
             RamAccountingContext ramAccountingContext = RamAccountingContext.forExecutionPhase(circuitBreaker, phase);
 
-            RowDownstream downstream = getDownstream(context, DistributionType.BROADCAST, Paging.PAGE_SIZE);
+            RowDownstream downstream = getDownstream(context, phase.distributionType(), Paging.PAGE_SIZE);
             FlatProjectorChain flatProjectorChain = null;
             if (!phase.projections().isEmpty()) {
                 flatProjectorChain = FlatProjectorChain.withAttachedDownstream(

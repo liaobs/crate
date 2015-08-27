@@ -24,6 +24,7 @@ package io.crate.planner.node.dml;
 import io.crate.planner.Plan;
 import io.crate.planner.PlanAndPlannedAnalyzedRelation;
 import io.crate.planner.PlanVisitor;
+import io.crate.planner.distribution.DistributionType;
 import io.crate.planner.node.dql.DQLPlanNode;
 import io.crate.planner.projection.Projection;
 
@@ -57,6 +58,11 @@ public class Upsert extends PlanAndPlannedAnalyzedRelation {
     @Override
     public void addProjection(Projection projection) {
         throw new UnsupportedOperationException("adding projection not supported");
+    }
+
+    @Override
+    public void setDistributionType(DistributionType distributionType) {
+        throw new UnsupportedOperationException("setDistributionType not supported");
     }
 
     @Override

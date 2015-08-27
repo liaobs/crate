@@ -21,27 +21,33 @@
 
 package io.crate.planner.node.dql;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Sets;
 import io.crate.analyze.WhereClause;
 import io.crate.metadata.Routing;
 import io.crate.metadata.table.TableInfo;
 import io.crate.planner.node.ExecutionPhase;
 import io.crate.planner.node.ExecutionPhaseVisitor;
+import io.crate.types.DataType;
+import io.crate.types.DataTypes;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 
 import java.io.IOException;
+import java.util.Collection;
 import java.util.Set;
 import java.util.UUID;
 
 public class CountPhase implements ExecutionPhase {
 
     public static final ExecutionPhaseFactory<CountPhase> FACTORY = new ExecutionPhaseFactory<CountPhase>() {
+
         @Override
         public CountPhase create() {
             return new CountPhase();
         }
     };
+    private static final ImmutableList<DataType> OUTPUT_TYPES = ImmutableList.<DataType>of(DataTypes.LONG);
     private UUID jobId;
     private int executionPhaseId;
     private Routing routing;
@@ -91,6 +97,11 @@ public class CountPhase implements ExecutionPhase {
         } else {
             return Sets.filter(routing.nodes(), TableInfo.IS_NOT_NULL_NODE_ID);
         }
+    }
+
+    @Override
+    public Collection<DataType> outputTypes() {
+        return OUTPUT_TYPES;
     }
 
     @Override

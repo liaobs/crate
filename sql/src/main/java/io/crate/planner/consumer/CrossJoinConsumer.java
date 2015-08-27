@@ -22,15 +22,18 @@
 package io.crate.planner.consumer;
 
 import com.google.common.base.MoreObjects;
-import com.google.common.collect.*;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ObjectArrays;
 import io.crate.Constants;
 import io.crate.analyze.*;
 import io.crate.analyze.relations.*;
 import io.crate.exceptions.ValidationException;
 import io.crate.metadata.OutputName;
 import io.crate.operation.projectors.TopN;
+import io.crate.planner.distribution.DistributionType;
+import io.crate.planner.distribution.UpstreamPhase;
 import io.crate.planner.node.NoopPlannedAnalyzedRelation;
-import io.crate.planner.node.dql.DQLPlanNode;
 import io.crate.planner.node.dql.MergePhase;
 import io.crate.planner.node.dql.join.NestedLoop;
 import io.crate.planner.node.dql.join.NestedLoopPhase;
@@ -211,18 +214,6 @@ public class CrossJoinConsumer implements Consumer {
             return INPUT_COLUMN_PRODUCER.process(symbol, new InputColumnProducerContext(inputSymbols));
         }
 
-        /**
-         * build a nested loop tree:
-         *
-         * E.g.:
-         *
-         * t1, t2, t3
-         *  \  /   /
-         *  \ /   /
-         *  NL   /
-         *   \  /
-         *    NL
-         */
         private NestedLoop toNestedLoop(List<QueriedTableRelation> queriedTables, ConsumerContext context) {
             assert queriedTables.size() > 1 : "must have at least 2 tables to create a nestedLoop";
 
@@ -247,29 +238,30 @@ public class CrossJoinConsumer implements Consumer {
                     leftOrderBy = leftRelation.querySpec().orderBy();
                     leftPlan = consumingPlanner.plan(leftRelation, context);
                     assert leftPlan != null;
+                    leftPlan.setDistributionType(DistributionType.SAME_NODE);
                 } else {
                     leftOutputs = new ArrayList<>(leftRelation.querySpec().outputs());
                     leftOutputs.addAll(rightRelation.querySpec().outputs());
-                    leftOrderBy = mergedOrderBy(leftRelation, rightRelation);
+                    leftOrderBy = mergedOrderBy(leftRelation.querySpec().orderBy(), rightRelation.querySpec().orderBy());
                     leftPlan = nl;
                 }
                 MergePhase leftMerge = mergePhase(
                         context,
-                        localExecutionNodes,
-                        leftPlan.resultNode(),
+                        (UpstreamPhase) leftPlan.resultNode(),
                         leftOutputs,
                         leftOrderBy
                 );
+                leftMerge.executionNodes(leftPlan.resultNode().executionNodes());
                 rightRelation = iterator.next();
                 PlannedAnalyzedRelation rightPlan = consumingPlanner.plan(rightRelation, context);
                 assert rightPlan != null;
                 MergePhase rightMerge = mergePhase(
                         context,
-                        localExecutionNodes,
-                        rightPlan.resultNode(),
+                        (UpstreamPhase) rightPlan.resultNode(),
                         rightRelation.querySpec().outputs(),
                         rightRelation.querySpec().orderBy()
                 );
+                rightMerge.executionNodes(leftMerge.executionNodes());
                 NestedLoopPhase nestedLoopPhase = new NestedLoopPhase(
                         jobId,
                         context.plannerContext().nextExecutionPhaseId(),
@@ -277,21 +269,40 @@ public class CrossJoinConsumer implements Consumer {
                         ImmutableList.<Projection>of(),
                         leftMerge,
                         rightMerge,
-                        localExecutionNodes
+                        leftMerge.executionNodes()
                 );
-                nl = new NestedLoop(jobId, leftPlan, rightPlan, nestedLoopPhase, true);
+
+                // TODO: should the merge be distributed as well if there are more than 2 relations?
+                MergePhase localMerge;
+                if (OrderBy.isSorted(leftOrderBy) || OrderBy.isSorted(rightRelation.querySpec().orderBy())) {
+                    List<Symbol> outputs = new ArrayList<>(leftOutputs);
+                    outputs.addAll(rightRelation.querySpec().outputs());
+                    localMerge = MergePhase.sortedMerge(
+                            jobId,
+                            context.plannerContext().nextExecutionPhaseId(),
+                            mergedOrderBy(leftOrderBy, rightRelation.querySpec().orderBy()),
+                            outputs,
+                            null,
+                            ImmutableList.<Projection>of(),
+                            nestedLoopPhase
+                    );
+                } else {
+                    localMerge = MergePhase.localMerge(
+                            jobId,
+                            context.plannerContext().nextExecutionPhaseId(),
+                            ImmutableList.<Projection>of(),
+                            nestedLoopPhase);
+                }
+                localMerge.executionNodes(localExecutionNodes);
+                nl = new NestedLoop(jobId, leftPlan, rightPlan, nestedLoopPhase, localMerge, true);
             }
             return nl;
         }
 
         private MergePhase mergePhase(ConsumerContext context,
-                                      Set<String> localExecutionNodes,
-                                      DQLPlanNode previousPhase,
+                                      UpstreamPhase upstreamPhase,
                                       List<Symbol> previousOutputs,
                                       @Nullable OrderBy orderBy) {
-            if (previousPhase instanceof MergePhase && previousPhase.executionNodes().isEmpty()) {
-                ((MergePhase) previousPhase).executionNodes(localExecutionNodes);
-            }
 
             MergePhase mergePhase;
             if (OrderBy.isSorted(orderBy)) {
@@ -302,17 +313,16 @@ public class CrossJoinConsumer implements Consumer {
                         previousOutputs,
                         orderBy.orderBySymbols(),
                         ImmutableList.<Projection>of(),
-                        previousPhase
+                        upstreamPhase
                 );
             } else {
                 mergePhase = MergePhase.localMerge(
                         context.plannerContext().jobId(),
                         context.plannerContext().nextExecutionPhaseId(),
                         ImmutableList.<Projection>of(),
-                        previousPhase
+                        upstreamPhase
                 );
             }
-            mergePhase.executionNodes(localExecutionNodes);
             return mergePhase;
         }
 
@@ -376,10 +386,7 @@ public class CrossJoinConsumer implements Consumer {
         }
 
         @Nullable
-        private OrderBy mergedOrderBy(QueriedTableRelation left, QueriedTableRelation right) {
-            OrderBy leftOrderBy = left.querySpec().orderBy();
-            OrderBy rightOrderBy = right.querySpec().orderBy();
-
+        private OrderBy mergedOrderBy(@Nullable OrderBy leftOrderBy, @Nullable OrderBy rightOrderBy) {
             if (leftOrderBy == null && rightOrderBy == null) {
                 return null;
             } else if (leftOrderBy == null) {

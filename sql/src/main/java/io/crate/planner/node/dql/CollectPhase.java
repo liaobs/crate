@@ -320,4 +320,8 @@ public class CollectPhase extends AbstractDQLPlanPhase implements UpstreamPhase 
                 DistributionType.BROADCAST
         );
     }
+
+    public void distributionType(DistributionType distributionType) {
+       this.distributionType = distributionType;
+    }
 }

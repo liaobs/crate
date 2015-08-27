@@ -26,8 +26,10 @@ import io.crate.planner.node.dql.CountPhase;
 import io.crate.planner.node.dql.FileUriCollectPhase;
 import io.crate.planner.node.dql.MergePhase;
 import io.crate.planner.node.dql.join.NestedLoopPhase;
+import io.crate.types.DataType;
 import org.elasticsearch.common.io.stream.Streamable;
 
+import java.util.Collection;
 import java.util.Set;
 import java.util.UUID;
 
@@ -64,6 +66,8 @@ public interface ExecutionPhase extends Streamable {
     int executionPhaseId();
 
     Set<String> executionNodes();
+
+    Collection<DataType> outputTypes();
 
     UUID jobId();
 

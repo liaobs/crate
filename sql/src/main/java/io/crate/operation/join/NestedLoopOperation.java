@@ -68,12 +68,14 @@ public class NestedLoopOperation implements RowUpstream {
 
     @Override
     public void pause() {
-        throw new UnsupportedOperationException();
+        leftDownstream.upstream().pause();
+        rightDownstream.upstream().pause();
     }
 
     @Override
     public void resume(boolean async) {
-        throw new UnsupportedOperationException();
+        leftDownstream.upstream().resume(async);
+        rightDownstream.upstream().resume(async);
     }
 
     @Override

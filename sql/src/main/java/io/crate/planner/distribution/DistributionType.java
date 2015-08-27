@@ -23,5 +23,6 @@ package io.crate.planner.distribution;
 
 public enum DistributionType {
     MODULO,
+    SAME_NODE,
     BROADCAST
 }
