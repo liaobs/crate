@@ -26,6 +26,8 @@ import com.google.common.util.concurrent.SettableFuture;
 import io.crate.core.collections.Bucket;
 import io.crate.operation.projectors.RowDownstreamAndHandle;
 
+import java.util.concurrent.CancellationException;
+
 public abstract class ResultProviderBase extends RowDownstreamAndHandle {
 
     private final SettableFuture<Bucket> result = SettableFuture.create();
@@ -59,7 +61,11 @@ public abstract class ResultProviderBase extends RowDownstreamAndHandle {
     @Override
     public void fail(Throwable throwable) {
         super.fail(throwable);
-        result.setException(doFail(throwable));
+        if (throwable instanceof CancellationException){
+            result.cancel(true);
+        } else {
+            result.setException(doFail(throwable));
+        }
     }
 
 
