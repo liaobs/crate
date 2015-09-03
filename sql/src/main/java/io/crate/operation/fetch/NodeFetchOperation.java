@@ -32,7 +32,6 @@ import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import io.crate.breaker.RamAccountingContext;
 import io.crate.core.collections.Bucket;
-import io.crate.exceptions.ContextMissingException;
 import io.crate.executor.transport.distributed.SingleBucketBuilder;
 import io.crate.jobs.JobContextService;
 import io.crate.jobs.JobExecutionContext;
@@ -140,10 +139,6 @@ public class NodeFetchOperation implements RowUpstream {
         for (IntObjectCursor<ShardDocIdsBucket> entry : shardBuckets) {
             Engine.Searcher searcher = fetchContext.searcher(entry.key);
             IndexService indexService = fetchContext.indexService(entry.key);
-            if (searcher == null) {
-                // TODO: correct contextType
-                throw new ContextMissingException(ContextMissingException.ContextType.SEARCH_CONTEXT, jobId, entry.key);
-            }
             // create new collect expression for every shard (collect expressions are not thread-safe)
             CollectInputSymbolVisitor.Context docCtx = docInputSymbolVisitor.extractImplementations(toFetchReferences);
             shardFetchers.add(
