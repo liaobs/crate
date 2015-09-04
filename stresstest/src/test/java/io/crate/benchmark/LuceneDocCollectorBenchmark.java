@@ -27,19 +27,20 @@ import com.carrotsearch.junitbenchmarks.annotation.BenchmarkHistoryChart;
 import com.carrotsearch.junitbenchmarks.annotation.BenchmarkMethodChart;
 import com.carrotsearch.junitbenchmarks.annotation.LabelType;
 import com.google.common.collect.ImmutableList;
+import com.google.common.util.concurrent.SettableFuture;
 import io.crate.analyze.OrderBy;
 import io.crate.analyze.WhereClause;
 import io.crate.breaker.RamAccountingContext;
+import io.crate.core.collections.Bucket;
+import io.crate.core.collections.Row;
 import io.crate.jobs.JobContextService;
 import io.crate.jobs.JobExecutionContext;
 import io.crate.metadata.ReferenceIdent;
 import io.crate.metadata.ReferenceInfo;
 import io.crate.metadata.TableIdent;
-import io.crate.operation.Input;
-import io.crate.operation.Paging;
+import io.crate.operation.*;
 import io.crate.operation.collect.*;
 import io.crate.operation.projectors.ProjectionToProjectorVisitor;
-import io.crate.operation.projectors.Projector;
 import io.crate.operation.projectors.SortingTopNProjector;
 import io.crate.planner.RowGranularity;
 import io.crate.planner.distribution.DistributionType;
@@ -61,7 +62,6 @@ import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.index.IndexService;
-import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.indices.IndexMissingException;
 import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.search.sort.SortBuilders;
@@ -91,7 +91,7 @@ public class LuceneDocCollectorBenchmark extends BenchmarkBase {
     public TestRule benchmarkRun = RuleChain.outerRule(new BenchmarkRule()).around(super.ruleChain);
 
     public static boolean dataGenerated = false;
-    public static final int NUMBER_OF_DOCUMENTS = 100_000;
+    public static final int NUMBER_OF_DOCUMENTS = 52_000;
     public static final int BENCHMARK_ROUNDS = 100;
     public static final int WARMUP_ROUNDS = 10;
 
@@ -99,7 +99,6 @@ public class LuceneDocCollectorBenchmark extends BenchmarkBase {
 
     public final static ESLogger logger = Loggers.getLogger(LuceneDocCollectorBenchmark.class);
 
-    private ShardId shardId = new ShardId(INDEX_NAME, 0);
     private JobContextService jobContextService;
     private ShardCollectService shardCollectService;
     private OrderBy orderBy;
@@ -109,6 +108,37 @@ public class LuceneDocCollectorBenchmark extends BenchmarkBase {
     private static final RamAccountingContext RAM_ACCOUNTING_CONTEXT =
             new RamAccountingContext("dummy", new NoopCircuitBreaker(CircuitBreaker.Name.FIELDDATA));
     private JobCollectContext jobCollectContext;
+
+
+    public class PausingCollectingProjector extends CollectingProjector{
+
+        public RowUpstream upstream;
+        public SettableFuture<Boolean> finished = SettableFuture.create();
+
+        @Override
+        public boolean setNextRow(Row row) {
+            upstream.pause();
+            return super.setNextRow(row);
+        }
+
+        @Override
+        public void fail(Throwable throwable) {
+            upstream.resume(true);
+        }
+
+        @Override
+        public Bucket doFinish() {
+            Bucket bucket = super.doFinish();
+            finished.set(true);
+            return bucket;
+        }
+
+        @Override
+        public RowDownstreamHandle registerUpstream(RowUpstream upstream) {
+            this.upstream = upstream;
+            return super.registerUpstream(upstream);
+        }
+    }
 
     @Override
     public byte[] generateRowSource() throws IOException {
@@ -180,7 +210,7 @@ public class LuceneDocCollectorBenchmark extends BenchmarkBase {
         return createDocCollector(orderBy, limit, collectingProjector, input);
     }
 
-    private LuceneDocCollector createDocCollector(OrderBy orderBy, Integer limit, Projector projector, List<Symbol> input) throws Exception{
+    private LuceneDocCollector createDocCollector(OrderBy orderBy, Integer limit, RowDownstream rowDownstream, List<Symbol> input) throws Exception{
         UUID jobId = UUID.randomUUID();
         CollectPhase node = new CollectPhase(
                 jobId,
@@ -196,7 +226,7 @@ public class LuceneDocCollectorBenchmark extends BenchmarkBase {
         node.limit(limit);
 
         ShardProjectorChain projectorChain = Mockito.mock(ShardProjectorChain.class);
-        Mockito.when(projectorChain.newShardDownstreamProjector(Matchers.any(ProjectionToProjectorVisitor.class))).thenReturn(projector);
+        Mockito.when(projectorChain.newShardDownstreamProjector(Matchers.any(ProjectionToProjectorVisitor.class))).thenReturn(rowDownstream);
 
         JobExecutionContext.Builder builder = jobContextService.newBuilder(jobId);
         jobCollectContext = new JobCollectContext(jobId, node,
@@ -254,19 +284,43 @@ public class LuceneDocCollectorBenchmark extends BenchmarkBase {
     @BenchmarkOptions(benchmarkRounds = BENCHMARK_ROUNDS, warmupRounds = WARMUP_ROUNDS)
     @Test
     public void testLuceneDocCollectorOrderedWithScrollingPerformance() throws Exception{
-        collectingProjector.rows.clear();
-        LuceneDocCollector docCollector = createDocCollector(orderBy, null, orderBy.orderBySymbols());
+        CollectingProjector downstream = new CollectingProjector();
+        LuceneDocCollector docCollector = createDocCollector(orderBy, null, downstream, orderBy.orderBySymbols());
         docCollector.doCollect();
-        collectingProjector.finish();
-        MatcherAssert.assertThat(collectingProjector.rows.size(), CoreMatchers.is(NUMBER_OF_DOCUMENTS));
+        MatcherAssert.assertThat(downstream.rows.size(), CoreMatchers.is(NUMBER_OF_DOCUMENTS));
+    }
+
+    @BenchmarkOptions(benchmarkRounds = BENCHMARK_ROUNDS, warmupRounds = WARMUP_ROUNDS)
+    @Test
+    public void testLuceneDocCollectorOrderedWithScrollingStartStopPerformance() throws Exception{
+        PausingCollectingProjector downstream = new PausingCollectingProjector();
+        LuceneDocCollector docCollector = createDocCollector(orderBy, null, downstream, orderBy.orderBySymbols());
+
+        // resumes docCollector after it's paused
+        docCollector.doCollect();
+
+        downstream.finished.get();
+        MatcherAssert.assertThat(downstream.rows.size(), CoreMatchers.is(NUMBER_OF_DOCUMENTS));
     }
 
     @BenchmarkOptions(benchmarkRounds = BENCHMARK_ROUNDS, warmupRounds = WARMUP_ROUNDS)
     @Test
     public void testLuceneDocCollectorOrderedWithoutScrollingPerformance() throws Exception{
-        LuceneDocCollector docCollector = createDocCollector(orderBy, NUMBER_OF_DOCUMENTS, orderBy.orderBySymbols());
+        CollectingProjector downstream = new CollectingProjector();
+        LuceneDocCollector docCollector = createDocCollector(orderBy, NUMBER_OF_DOCUMENTS, downstream, orderBy.orderBySymbols());
         docCollector.doCollect();
-        collectingProjector.finish();
+        //collectingProjector.finish();
+    }
+
+
+    @BenchmarkOptions(benchmarkRounds = BENCHMARK_ROUNDS, warmupRounds = WARMUP_ROUNDS)
+    @Test
+    public void testLuceneDocCollectorOrderedWithoutScrollingStartStopPerformance() throws Exception{
+        PausingCollectingProjector downstream = new PausingCollectingProjector();
+        LuceneDocCollector docCollector = createDocCollector(orderBy, NUMBER_OF_DOCUMENTS, downstream, orderBy.orderBySymbols());
+        docCollector.doCollect();
+        downstream.finished.get();
+        //downstream.finish();
     }
 
     @BenchmarkOptions(benchmarkRounds = BENCHMARK_ROUNDS, warmupRounds = WARMUP_ROUNDS)
