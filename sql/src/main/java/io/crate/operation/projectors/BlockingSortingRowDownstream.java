@@ -29,9 +29,6 @@ import io.crate.operation.RowDownstream;
 import io.crate.operation.RowDownstreamHandle;
 import io.crate.operation.RowUpstream;
 import io.crate.operation.projectors.sorting.OrderingByPosition;
-import org.apache.commons.lang3.RandomUtils;
-import org.elasticsearch.common.logging.ESLogger;
-import org.elasticsearch.common.logging.Loggers;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -47,12 +44,9 @@ public class BlockingSortingRowDownstream implements Projector  {
     private final LowestCommon lowestCommon = new LowestCommon();
     private RowDownstreamHandle downstreamContext;
 
-    private static ESLogger LOGGER = Loggers.getLogger(MergeProjector.class);
-
-
     public BlockingSortingRowDownstream(int[] orderBy,
-                          boolean[] reverseFlags,
-                          Boolean[] nullsFirst) {
+                                        boolean[] reverseFlags,
+                                        Boolean[] nullsFirst) {
         List<Comparator<Row>> comparators = new ArrayList<>(orderBy.length);
         for (int i = 0; i < orderBy.length; i++) {
             comparators.add(OrderingByPosition.rowOrdering(orderBy[i], reverseFlags[i], nullsFirst[i]));
@@ -72,7 +66,6 @@ public class BlockingSortingRowDownstream implements Projector  {
         upstreams.add(upstream);
         remainingUpstreams.incrementAndGet();
         BlockingSortingRowDownstreamHandle handle = new BlockingSortingRowDownstreamHandle(this, upstream);
-        //LOGGER.error("{} registered ", handle.ident);
         downstreamHandles.add(handle);
         return handle;
     }
@@ -84,7 +77,6 @@ public class BlockingSortingRowDownstream implements Projector  {
 
     public void upstreamFinished() {
         if (remainingUpstreams.decrementAndGet() <= 0) {
-            //LOGGER.error("total finish!");
             if (downstreamContext != null) {
                 downstreamContext.finish();
             }
@@ -124,13 +116,9 @@ public class BlockingSortingRowDownstream implements Projector  {
         private final RowUpstream upstream;
         private AtomicBoolean finished = new AtomicBoolean(false);
         private Row row = null;
-
-        private String ident = ""+RandomUtils.nextInt(0, 100);
-
         private final Object lock = new Object();
 
         public BlockingSortingRowDownstreamHandle(BlockingSortingRowDownstream projector, RowUpstream upstream) {
-            ////////LOGGER.error("{} created on proj {}", this.ident, projector);
             this.upstream = upstream;
             this.projector = projector;
         }
@@ -139,14 +127,12 @@ public class BlockingSortingRowDownstream implements Projector  {
 
         @Override
         public boolean setNextRow(Row row) {
-            //////////////LOGGER.error("{} setNextRow", this.ident);
             if (projector.downstreamAborted.get()) {
                 return false;
             }
             if (!lowestCommon.isEmittable(row, this)) {
                 pause();
             }
-            ////////////LOGGER.error("{} emit", ident);
             return downstreamContext.setNextRow(row);
         }
 
@@ -171,8 +157,6 @@ public class BlockingSortingRowDownstream implements Projector  {
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }
-                } else {
-                    //LOGGER.error("pause was aborted");
                 }
             }
 
@@ -182,8 +166,6 @@ public class BlockingSortingRowDownstream implements Projector  {
             synchronized (lock) {
                 if (!pendingPause.getAndSet(false)) {
                     lock.notify();
-                } else {
-                    //LOGGER.error("aborted pause");
                 }
             }
         }
@@ -194,7 +176,6 @@ public class BlockingSortingRowDownstream implements Projector  {
             if (finished.compareAndSet(false, true)) {
                 projector.upstreamFinished();
                 lowestCommon.raiseLowest(null, this);
-                ////LOGGER.error("{} finish()", this.ident);
             }
         }
     }
@@ -205,26 +186,26 @@ public class BlockingSortingRowDownstream implements Projector  {
         private final Object lowestLock = new Object();
 
         public boolean isEmittable(Row row, BlockingSortingRowDownstreamHandle handle) {
-            synchronized (lowestLock) {
-                if (lowestToEmit != null && (lowestToEmit == row || ordering.compare(row, lowestToEmit) >= 0)) {
-                    return true;
-                }
+            if (lowestToEmit != null && (lowestToEmit == row || ordering.compare(row, lowestToEmit) >= 0)) {
+                return true;
             }
             return raiseLowest(row, handle);
         }
 
         public boolean raiseLowest(Row row, final BlockingSortingRowDownstreamHandle handle) {
             synchronized (lowestLock) {
+                for (BlockingSortingRowDownstreamHandle h : downstreamHandles) {
+                    if (h != handle && h.row() == null && !h.isFinished()) {
+                        handle.row = row;
+                        handle.pendingPause.set(true);
+                        return false;
+                    }
+                }
                 Row nextLowest = row;
-                handle.row = row;
                 Set<BlockingSortingRowDownstreamHandle> toContinue = new HashSet() {{
                     add(handle);
                 }};
                 for (BlockingSortingRowDownstreamHandle h : downstreamHandles) {
-                    if (h != handle && h.row() == null && !h.isFinished()) {
-                        handle.pendingPause.set(true);
-                        return false;
-                    }
                     if (nextLowest == null) {
                         nextLowest = h.row();
                         toContinue.clear();
@@ -252,13 +233,13 @@ public class BlockingSortingRowDownstream implements Projector  {
                             h.resume();
                         }
                     }
-                    if (cont) {
-                        handle.row = null;
-                    } else if (!handle.isFinished()) {
+                    if (!cont && !handle.isFinished()) {
+                        handle.row = row;
                         handle.pendingPause.set(true);
                     }
                     return cont;
                 }
+                handle.row = row;
                 handle.pendingPause.set(true);
                 return false;
             }
