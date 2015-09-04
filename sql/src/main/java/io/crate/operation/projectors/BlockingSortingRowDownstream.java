@@ -72,6 +72,7 @@ public class BlockingSortingRowDownstream implements Projector  {
         upstreams.add(upstream);
         remainingUpstreams.incrementAndGet();
         BlockingSortingRowDownstreamHandle handle = new BlockingSortingRowDownstreamHandle(this, upstream);
+        //LOGGER.error("{} registered ", handle.ident);
         downstreamHandles.add(handle);
         return handle;
     }
@@ -83,7 +84,7 @@ public class BlockingSortingRowDownstream implements Projector  {
 
     public void upstreamFinished() {
         if (remainingUpstreams.decrementAndGet() <= 0) {
-            ////////////////LOGGER.error("total finish!");
+            //LOGGER.error("total finish!");
             if (downstreamContext != null) {
                 downstreamContext.finish();
             }
@@ -129,7 +130,7 @@ public class BlockingSortingRowDownstream implements Projector  {
         private final Object lock = new Object();
 
         public BlockingSortingRowDownstreamHandle(BlockingSortingRowDownstream projector, RowUpstream upstream) {
-            //LOGGER.error("{} created on proj {}", this.ident, projector);
+            ////////LOGGER.error("{} created on proj {}", this.ident, projector);
             this.upstream = upstream;
             this.projector = projector;
         }
@@ -138,16 +139,14 @@ public class BlockingSortingRowDownstream implements Projector  {
 
         @Override
         public boolean setNextRow(Row row) {
-            ////////LOGGER.error("{} setNextRow", this.ident);
-            row = new RowN(row.materialize());
+            //////////////LOGGER.error("{} setNextRow", this.ident);
             if (projector.downstreamAborted.get()) {
                 return false;
             }
             if (!lowestCommon.isEmittable(row, this)) {
-                pendingPause.set(true);
                 pause();
             }
-            //////LOGGER.error("{} emit", ident);
+            ////////////LOGGER.error("{} emit", ident);
             return downstreamContext.setNextRow(row);
         }
 
@@ -165,29 +164,27 @@ public class BlockingSortingRowDownstream implements Projector  {
         }
 
         private void pause() {
-            if (pendingPause.compareAndSet(true, false)) {
-                synchronized (lock) {
+            synchronized (lock) {
+                if (pendingPause.compareAndSet(true, false)) {
                     try {
-                        //LOGGER.error("{} pause", this.ident);
                         lock.wait();
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }
+                } else {
+                    //LOGGER.error("pause was aborted");
                 }
-            } else {
-                //////LOGGER.error("{} not pausing, conflict", this.ident);
             }
 
         }
 
         private void resume() {
-            if (!pendingPause.getAndSet(false)) {
-                synchronized (lock) {
+            synchronized (lock) {
+                if (!pendingPause.getAndSet(false)) {
                     lock.notify();
+                } else {
+                    //LOGGER.error("aborted pause");
                 }
-                //LOGGER.error("{} resume", this.ident);
-            } else {
-                //////LOGGER.error("{} not resuming, just abort pause", this.ident);
             }
         }
 
@@ -197,7 +194,7 @@ public class BlockingSortingRowDownstream implements Projector  {
             if (finished.compareAndSet(false, true)) {
                 projector.upstreamFinished();
                 lowestCommon.raiseLowest(null, this);
-                //LOGGER.error("{} finish()", this.ident);
+                ////LOGGER.error("{} finish()", this.ident);
             }
         }
     }
@@ -205,63 +202,66 @@ public class BlockingSortingRowDownstream implements Projector  {
     private class LowestCommon {
 
         private Row lowestToEmit = null;
+        private final Object lowestLock = new Object();
 
         public boolean isEmittable(Row row, BlockingSortingRowDownstreamHandle handle) {
-            ////LOGGER.error("{} isEmittable ?", handle.ident);
-            if( lowestToEmit != null && ( lowestToEmit == row || ordering.compare(row, lowestToEmit) >= 0)) {
-                ////LOGGER.error("{} is emittable", handle.ident);
-                return true;
-            } else {
-                return raiseLowest(row, handle);
+            synchronized (lowestLock) {
+                if (lowestToEmit != null && (lowestToEmit == row || ordering.compare(row, lowestToEmit) >= 0)) {
+                    return true;
+                }
             }
+            return raiseLowest(row, handle);
         }
 
-        public synchronized boolean raiseLowest(Row row, final BlockingSortingRowDownstreamHandle handle) {
-            ////LOGGER.error("{} raiseLowest", handle.ident);
-            Row nextLowest = row;
-            Set<BlockingSortingRowDownstreamHandle> toContinue = new HashSet(){{add(handle);}};
-            for (BlockingSortingRowDownstreamHandle h : downstreamHandles) {
-                if (h != handle && h.row() == null && !h.isFinished()) {
-                    handle.row = row;
-                    return false;
-                }
-                if (nextLowest == null) {
-                    nextLowest = h.row();
-                    toContinue.clear();
-                    toContinue.add(h);
-                    continue;
-                }
-                // h != handle check if this is the only handle
-                if (h != handle) {
-                    int comp = ordering.compare(h.row(), nextLowest);
-                    if (comp == 0) {
-                        toContinue.add(h);
-                    } else if (comp > 0) {
+        public boolean raiseLowest(Row row, final BlockingSortingRowDownstreamHandle handle) {
+            synchronized (lowestLock) {
+                Row nextLowest = row;
+                handle.row = row;
+                Set<BlockingSortingRowDownstreamHandle> toContinue = new HashSet() {{
+                    add(handle);
+                }};
+                for (BlockingSortingRowDownstreamHandle h : downstreamHandles) {
+                    if (h != handle && h.row() == null && !h.isFinished()) {
+                        handle.pendingPause.set(true);
+                        return false;
+                    }
+                    if (nextLowest == null) {
+                        nextLowest = h.row();
                         toContinue.clear();
                         toContinue.add(h);
-                        nextLowest = h.row();
+                        continue;
+                    }
+                    // h != handle check if this is the only handle
+                    if (h != handle) {
+                        int comp = ordering.compare(h.row(), nextLowest);
+                        if (comp == 0) {
+                            toContinue.add(h);
+                        } else if (comp > 0) {
+                            toContinue.clear();
+                            toContinue.add(h);
+                            nextLowest = h.row();
+                        }
                     }
                 }
-            }
-            if (nextLowest != null && nextLowest != lowestToEmit) {
-                lowestToEmit = nextLowest;
-                ////////LOGGER.error("{} raised", handle.ident);
-                for (BlockingSortingRowDownstreamHandle h : toContinue) {
-                    if ( h != handle) {
-                        //LOGGER.error("{} resume {}", handle.ident, h.ident);
-                        h.row = null;
-                        h.resume();
+                if (nextLowest != null && nextLowest != lowestToEmit) {
+                    boolean cont = nextLowest == row;
+                    lowestToEmit = new RowN(nextLowest.materialize());
+                    for (BlockingSortingRowDownstreamHandle h : toContinue) {
+                        if (h != handle) {
+                            h.row = null;
+                            h.resume();
+                        }
                     }
+                    if (cont) {
+                        handle.row = null;
+                    } else if (!handle.isFinished()) {
+                        handle.pendingPause.set(true);
+                    }
+                    return cont;
                 }
-                boolean cont = lowestToEmit == row;
-                if (!cont) {
-                    handle.row = row;
-                }
-                return cont;
+                handle.pendingPause.set(true);
+                return false;
             }
-            ////////LOGGER.error("{} finished without raising", handle.ident);
-            handle.row = row;
-            return false;
         }
 
     }
