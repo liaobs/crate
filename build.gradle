@@ -193,6 +193,9 @@ idea {
         ipr {
             withXml { provider ->
                 def node = provider.asNode()
+                node.append(new XmlParser().parse(file("codeStyle.xml")))
+
+
                 def copyrightManager = node.component.find { it.'@name' == 'CopyrightManager' }
                 copyrightManager.@default = "CrateASL2"
                 def aslCopyright = copyrightManager.copyright.find { it.option.find { it.@name == "myName" }?.@value == "CrateASL2" }
@@ -203,6 +206,7 @@ idea {
         }
     }
 }
+
 
 task wrapper(type: Wrapper) {
     gradleVersion = '2.4'
