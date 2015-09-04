@@ -197,9 +197,11 @@ public class ShardCollectSource implements CollectSource {
                     );
                     crateCollectors.add(collector);
                 } catch (IndexShardMissingException | CancellationException | IllegalIndexShardStateException e) {
+                    projectorChain.fail(e);
                     throw e;
-                } catch (Exception e) {
-                    throw new UnhandledServerException(e);
+                } catch (Throwable t) {
+                    projectorChain.fail(t);
+                    throw new UnhandledServerException(t);
                 }
             }
         }
